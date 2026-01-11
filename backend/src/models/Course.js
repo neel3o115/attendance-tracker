@@ -1,17 +1,11 @@
 const mongoose = require("mongoose");
 
-const subjectSchema = new mongoose.Schema(
+const courseSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-    },
-
-    courseId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Course",
-      required: true
     },
 
     name: {
@@ -32,5 +26,7 @@ const subjectSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-subjectSchema.index({ userId: 1, courseId: 1, name: 1 }, { unique: true });
-module.exports = mongoose.model("Subject", subjectSchema);
+// unique course name per user
+courseSchema.index({ userId: 1, name: 1 }, { unique: true });
+
+module.exports = mongoose.model("Course", courseSchema);
