@@ -10,7 +10,7 @@ const router = express.Router();
 
 /**
  * POST /api/attendance/mark
- * body: { subjectId, status }
+ * body: { subjectId, status, date }
  * status: "attended" | "missed"
  */
 router.post("/mark", protect, asyncHandler(async (req, res) => {

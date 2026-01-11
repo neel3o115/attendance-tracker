@@ -67,11 +67,35 @@ router.get("/:courseId/summary", protect, async (req, res) => {
     }
 
     // subjects in this course
-    const subjects = await Subject.find({ userId: req.userId, courseId }).sort({ createdAt: -1 });
+    const subjects = await Subject.find({ userId: req.userId, courseId }).sort({
+      createdAt: -1,
+    });
 
     const subjectIds = subjects.map((s) => s._id);
 
-    // overall aggregation for this course (across all its subjectIds)
+    // ✅ if no subjects => directly return empty summary (prevents aggregation weirdness)
+    if (subjectIds.length === 0) {
+      return res.status(200).json({
+        course: {
+          id: course._id,
+          name: course.name,
+          minAttendance: course.minAttendance,
+        },
+        overall: {
+          total: 0,
+          attended: 0,
+          missed: 0,
+          attendancePercent: 0,
+          classesNeededToReach: 0,
+          leavesAvailable: 0,
+        },
+        subjects: [],
+      });
+    }
+
+    // =======================
+    // overall course stats
+    // =======================
     const overallAgg = await AttendanceEntry.aggregate([
       {
         $match: {
@@ -91,6 +115,7 @@ router.get("/:courseId/summary", protect, async (req, res) => {
     ]);
 
     const overallCounts = overallAgg[0] || { total: 0, attended: 0 };
+
     const total = overallCounts.total;
     const attended = overallCounts.attended;
     const missed = total - attended;
@@ -111,6 +136,78 @@ router.get("/:courseId/summary", protect, async (req, res) => {
       leavesAvailable = Math.max(0, Math.floor(L));
     }
 
+    // ============================
+    // ✅ subject-wise stats (NEW)
+    // ============================
+    const subjectAgg = await AttendanceEntry.aggregate([
+      {
+        $match: {
+          userId: new mongoose.Types.ObjectId(req.userId),
+          subjectId: { $in: subjectIds },
+        },
+      },
+      {
+        $group: {
+          _id: "$subjectId",
+          total: { $sum: 1 },
+          attended: {
+            $sum: { $cond: [{ $eq: ["$status", "attended"] }, 1, 0] },
+          },
+        },
+      },
+    ]);
+
+    const statsMap = new Map();
+    for (const st of subjectAgg) {
+      statsMap.set(String(st._id), {
+        total: st.total,
+        attended: st.attended,
+        missed: st.total - st.attended,
+      });
+    }
+
+    const subjectsWithStats = subjects.map((s) => {
+      const subjectStats = statsMap.get(String(s._id)) || {
+        total: 0,
+        attended: 0,
+        missed: 0,
+      };
+
+      const stTotal = subjectStats.total;
+      const stAttended = subjectStats.attended;
+      const stMissed = subjectStats.missed;
+
+      const sMin = s.minAttendance;
+      const sp = sMin / 100;
+
+      const sAttendancePercent =
+        stTotal === 0 ? 0 : (stAttended / stTotal) * 100;
+
+      let sClassesNeeded = 0;
+      if (stTotal > 0 && sAttendancePercent + 1e-9 < sMin) {
+        const x = (sp * stTotal - stAttended) / (1 - sp);
+        sClassesNeeded = Math.max(0, Math.ceil(x));
+      }
+
+      let sLeaves = 0;
+      if (stTotal > 0 && sAttendancePercent + 1e-9 >= sMin) {
+        const L = (stAttended - sp * stTotal) / sp;
+        sLeaves = Math.max(0, Math.floor(L));
+      }
+
+      return {
+        subjectId: s._id,
+        name: s.name,
+        minAttendance: s.minAttendance,
+        total: stTotal,
+        attended: stAttended,
+        missed: stMissed,
+        attendancePercent: Number(sAttendancePercent.toFixed(2)),
+        classesNeededToReach: sClassesNeeded,
+        leavesAvailable: sLeaves,
+      };
+    });
+
     return res.status(200).json({
       course: {
         id: course._id,
@@ -125,14 +222,10 @@ router.get("/:courseId/summary", protect, async (req, res) => {
         classesNeededToReach,
         leavesAvailable,
       },
-      subjects: subjects.map((s) => ({
-        subjectId: s._id,
-        name: s.name,
-        minAttendance: s.minAttendance,
-      })),
+      subjects: subjectsWithStats,
     });
   } catch (err) {
-    console.error(err);
+    console.error("course summary error:", err);
     return res.status(500).json({ message: "server error" });
   }
 });
